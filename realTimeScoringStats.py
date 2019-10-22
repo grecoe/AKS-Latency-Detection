@@ -57,7 +57,7 @@
 from datetime import datetime,timedelta
 from utils.logUtils import *
 from utils.aksUtils import * 
-from utils.latencyUtils import LatencyTracker 
+from utils.latencyUtils import LatencyTracker, RequestData 
 
 
 # Let the user choose which kubectl context to use.
@@ -92,6 +92,9 @@ for pod in pods:
 # Line start that indicates new request
 predictionIdentifier = "127.0.0.1"
 
+# Optional header, won't hold it to it.....
+optionalHeader = 'X-Ms-Request-Id'
+
 # DL Path prediction line - "Predictions took"
 # ML Path prediction line - "Prediction took"
 #Default to DL path
@@ -107,8 +110,9 @@ if pathSelector == 1:
 else:
     predictionLine = "Predictions took"
 
-
-# Process any files we have. 
+'''
+    Process whatever files were found
+'''
 print("Start processing logs ...")
 
 latencyEntries = 0
@@ -125,15 +129,13 @@ for file in fileNames:
         # First line will tell us if we have unicode or not....
         isUnicodeFile = detectUnicode(line)
  
+        isRecord = False
+        latency = 0.0
+        timeStamp = None
+        requestId = ''
         while line:
             if isUnicodeFile:
                 line = converAscii(line)
-
-            if line.__contains__(predictionLine):
-                latencyEntries += 1
-                # Prediction(s) took 72.81 ms
-                parts = line.split(' ')
-                latencies[file].latencies.append(float(parts[2]))
 
             if line.__contains__(predictionIdentifier):
                 callCount += 1
@@ -141,13 +143,34 @@ for file in fileNames:
                 parts = line.split(' ')
                 datePart = parts[3]
                 dateString = datePart.strip('[]') 
-                dateConstruct = datetime.strptime(dateString, "%d/%b/%Y:%H:%M:%S")
-                latencies[file].timeStamps.append(dateConstruct)
-                
+                timeStamp = datetime.strptime(dateString, "%d/%b/%Y:%H:%M:%S")
+                isRecord = True
+
+            if line.__contains__(optionalHeader):
+                #  Header : Value
+                parts = line.strip().split(':')
+                requestId = parts[1].strip()
+
+            if line.__contains__(predictionLine):
+                latencyEntries += 1
+                # Prediction(s) took 72.81 ms
+                parts = line.split(' ')
+                latency = float(parts[2])
+
+                if isRecord:
+                    isRecord = False
+                    rd = RequestData()
+                    rd.latency = latency
+                    rd.time = timeStamp
+                    rd.requestId = requestId
+                    latencies[file].requestInfo.append(rd)
 
             line = fp.readline()
 
-# Build up the results and write them out to {deploymentname}_results.txt
+
+'''
+    Build up the results and write them out to a file {deploymentname}_results.txt
+'''
 resultsFile = "{}_results.txt".format(namespaceSelection[0])
 
 results = []
@@ -159,24 +182,16 @@ for pod in pods:
 results.append("\n")
 
 results.append("Total calls - {} ".format(callCount))
-results.append("Total latency entries - {}\n".format(latencyEntries))
+results.append("Total latency entries - {}".format(latencyEntries))
+
+fullRecordCount = 0
+for key in latencies.keys():
+    fullRecordCount += len(latencies[key].requestInfo)
+results.append("Full Requests Captured - {}\n".format(fullRecordCount))
+
 
 for key in latencies.keys():
-    total, avg, high, low = latencies[key].getStats()
-    totalTimes, first, last = latencies[key].getTimes()
-    elapsedTime = ((last - first).total_seconds()) / 60
-    
-    results.append("{}File : {}".format('\n', key))
-    results.append("Times ({}):".format(totalTimes))
-    results.append("\t Earliest: {}".format(first))
-    results.append("\t Latest: {}".format(last))
-    results.append("\t Time in minutes: {}".format(elapsedTime))
-
-    results.append("Scoring Calls ({}):".format(total))
-    results.append("\t Average: {} ms".format(avg))
-    results.append("\t Slowest: {} ms".format(high))
-    results.append("\t Fastest: {} ms".format(low))
-    results.append("\t Throughput: {} RPS".format(total / (elapsedTime *60)))
+    results.extend(latencies[key].getPrintableFormat(key))
 
 print("Writing out results.....")
 with open(resultsFile,mode="w") as outputFile:
@@ -184,3 +199,19 @@ with open(resultsFile,mode="w") as outputFile:
         outputFile.write(result  + "\n")
 
 print("Results in {}".format(resultsFile))
+
+'''
+    Allow a search of current records by request ID
+'''
+print("\nSearch for requests by ID, enter q to stop.\n")
+while True:
+    requestId = input("\nEnter a request ID to find> ")
+    if requestId.strip() == 'q':
+        break
+
+    for key in latencies.keys():
+        reqById = latencies[key].findByRequestId(requestId)
+        if len(reqById) > 0:
+            print("Found in file: ", key)
+            for r in reqById:
+                print("LATENCY: " , r.latency, " TIME: ", r.time)

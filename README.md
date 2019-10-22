@@ -17,6 +17,7 @@ With that knowledge, this set of scripts are used to:
 2. Let the user choose the deployment from that cluster to collect and analyze logs for. 
 3. Determine the number of replicas (pods) that have been allocated to the service.
 4. Download the logs and parse them for useful information.
+5. Search by request ID once parsing is complete to find individual transactions. 
 
 ## Pre-Requisites
 * You have an AKS cluster with either the DL or ML model deployed to it. You can have many, but it is required to at least have one. 
